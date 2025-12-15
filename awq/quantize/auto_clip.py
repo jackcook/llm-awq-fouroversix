@@ -9,19 +9,23 @@ __all__ = ["auto_clip_block"]
 # weight quantization
 @torch.no_grad()
 def auto_clip_layer(
-    w, input_feat, n_bit, q_config, n_grid=20, max_shrink=0.5, n_sample_token=512
+    w, input_feat, w_bit, a_bit, w_q_config, a_q_config, n_grid=20, max_shrink=0.5, n_sample_token=512
 ):
     assert w.dim() == 2
     org_w_shape = w.shape
     # w           [co, ci]      -> [co, 1, n_group, group size]
     # input_feat  [n_token, ci] -> [1, n_token, n_group, group size]
-    group_size = (
-        q_config["q_group_size"] if q_config["q_group_size"] > 0 else w.shape[1]
+    w_group_size = (
+        w_q_config["q_group_size"] if w_q_config["q_group_size"] > 0 else w.shape[1]
+    )
+    a_group_size = (
+        a_q_config["q_group_size"] if a_q_config["q_group_size"] > 0 else input_feat.shape[-1]
     )
     input_feat = input_feat.view(-1, input_feat.shape[-1])
-    input_feat = input_feat.reshape(1, input_feat.shape[0], -1, group_size)
+    input_feat = pseudo_quantize_tensor(input_feat, n_bit=a_bit, **a_q_config)
+    input_feat = input_feat.reshape(1, input_feat.shape[0], -1, a_group_size)
     input_feat = input_feat[:, 0 :: input_feat.shape[1] // n_sample_token]
-    w = w.reshape(w.shape[0], 1, -1, group_size)
+    w = w.reshape(w.shape[0], 1, -1, w_group_size)
 
     oc_batch_size = 256 if w.shape[0] % 256 == 0 else 64  # prevent OOM
     assert w.shape[0] % oc_batch_size == 0
@@ -42,7 +46,7 @@ def auto_clip_layer(
             max_val = org_max_val * (1 - i_s / n_grid)
             min_val = -max_val
             cur_w = torch.clamp(w, min_val, max_val)
-            q_w = pseudo_quantize_tensor(cur_w, n_bit=n_bit, **q_config)
+            q_w = pseudo_quantize_tensor(cur_w.squeeze(), n_bit=w_bit, **w_q_config).reshape_as(cur_w)
             cur_out = (input_feat * q_w).sum(dim=-1)
 
             # co, 1, n_group, 1
@@ -64,7 +68,7 @@ def auto_clip_layer(
 
 
 @torch.no_grad()
-def auto_clip_block(module, w_bit, q_config, input_feat):
+def auto_clip_block(module, w_bit, a_bit, w_q_config, a_q_config, input_feat):
     named_linears = {
         name: m for name, m in module.named_modules() if isinstance(m, nn.Linear)
     }
@@ -76,7 +80,7 @@ def auto_clip_block(module, w_bit, q_config, input_feat):
             continue
         named_linears[name].cuda()
         max_val = auto_clip_layer(
-            named_linears[name].weight, input_feat[name], n_bit=w_bit, q_config=q_config
+            named_linears[name].weight, input_feat[name], w_bit=w_bit, a_bit=a_bit, w_q_config=w_q_config, a_q_config=a_q_config
         )
         clip_list.append((name, max_val))
         named_linears[name].cpu()
@@ -89,10 +93,8 @@ def apply_clip(module, clip_list):
 
     for name, max_val in clip_list:
         layer = get_op_by_name(module, name)
-        layer.cuda()
         max_val = max_val.to(layer.weight.device).to(layer.weight.dtype)
         org_shape = layer.weight.shape
         layer.weight.data = layer.weight.data.reshape(*max_val.shape[:2], -1)
         layer.weight.data = torch.clamp(layer.weight.data, -max_val, max_val)
         layer.weight.data = layer.weight.data.reshape(org_shape)
-        layer.cpu()

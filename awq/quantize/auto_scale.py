@@ -7,6 +7,7 @@ from transformers.models.opt.modeling_opt import OPTDecoderLayer
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaRMSNorm
 from transformers.activations import GELUActivation
 from transformers.models.qwen2.modeling_qwen2 import Qwen2RMSNorm, Qwen2DecoderLayer
+from transformers.models.qwen3.modeling_qwen3 import Qwen3RMSNorm, Qwen3DecoderLayer
 
 from .qmodule import ScaledActivation
 from ..utils.module import get_op_by_name, get_op_name, set_op_by_name
@@ -84,7 +85,7 @@ def scale_gelu_fc(gelu, fc, scales):
 
 
 @torch.no_grad()
-def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat):
+def auto_scale_block(module, module_kwargs, w_bit, a_bit, w_q_config, a_q_config, input_feat):
     from .quantizer import pseudo_quantize_tensor
 
     # firstly, get the weight quantize function
@@ -94,7 +95,7 @@ def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat):
             return pseudo_quantize_tensor(
                 p,
                 n_bit=w_bit,
-                **q_config,
+                **w_q_config,
             ).detach()
 
     else:
@@ -110,6 +111,8 @@ def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat):
         # w: co, ci
         # x: n, ci
         x = x.to(next(block.parameters()).device)
+        for i in range(x.shape[0]):
+            x[i] = pseudo_quantize_tensor(x[i], n_bit=a_bit, **a_q_config)
         with torch.no_grad():
             org_out = block(x, **kwargs)
             if isinstance(org_out, tuple):
@@ -212,7 +215,7 @@ def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat):
             )
         )
 
-    elif isinstance(module, (LlamaDecoderLayer, Qwen2DecoderLayer)):
+    elif isinstance(module, (LlamaDecoderLayer, Qwen2DecoderLayer, Qwen3DecoderLayer)):
         # attention input
         scales_list.append(
             _auto_get_scale(
@@ -451,15 +454,10 @@ def apply_scale(module, scales_list, input_feat_dict=None):
         prev_op = get_op_by_name(module, prev_op_name)
         layers = [get_op_by_name(module, name) for name in layer_names]
 
-        prev_op.cuda()
-        for layer in layers:
-            layer.cuda()
-        scales.cuda()
-
         if isinstance(prev_op, nn.Linear):
             assert len(layers) == 1
             scale_fc_fc(prev_op, layers[0], scales)
-        elif isinstance(prev_op, (nn.LayerNorm, LlamaRMSNorm, Qwen2RMSNorm)):
+        elif isinstance(prev_op, (nn.LayerNorm, LlamaRMSNorm, Qwen2RMSNorm, Qwen3RMSNorm)):
             scale_ln_fcs(prev_op, layers, scales)
         elif isinstance(prev_op, (nn.GELU, BloomGelu, GELUActivation, nn.SiLU)):
             new_module = ScaledActivation(prev_op, scales)
@@ -473,8 +471,3 @@ def apply_scale(module, scales_list, input_feat_dict=None):
             for layer_name in layer_names:
                 inp = input_feat_dict[layer_name]
                 inp.div_(scales.view(1, -1).to(inp.device).to(inp.dtype))
-
-        prev_op.cpu()
-        for layer in layers:
-            layer.cpu()
-        scales.cpu()

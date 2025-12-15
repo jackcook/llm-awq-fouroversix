@@ -5,13 +5,17 @@ from datasets import load_dataset
 def get_calib_dataset(data="pileval", tokenizer=None, n_samples=512, block_size=512):
     if data == "pileval":
         dataset = load_dataset("mit-han-lab/pile-val-backup", split="validation")
+    elif data == "wikitext":
+        dataset = load_dataset(
+            "EleutherAI/wikitext_document_level", "wikitext-2-raw-v1", split="train"
+        )
     else:
         raise NotImplementedError
     dataset = dataset.shuffle(seed=42)
     samples = []
     n_run = 0
     for data in dataset:
-        line = data["text"]
+        line = data["text" if data == "pileval" else "page"]
         line = line.strip()
         line_encoded = tokenizer.encode(line)
         if len(line_encoded) > 512:

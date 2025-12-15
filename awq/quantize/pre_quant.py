@@ -15,6 +15,7 @@ except ImportError as e:
     pass
 
 from transformers.models.qwen2.modeling_qwen2 import Qwen2ForCausalLM
+from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 
 from .auto_scale import auto_scale_block, apply_scale
 from .auto_clip import auto_clip_block, apply_clip
@@ -27,7 +28,11 @@ def get_named_linears(module):
 
 
 def get_blocks(model):
-    if model.__class__.__name__ in ("LlamaForCausalLM", "Qwen2ForCausalLM"):
+    if model.__class__.__name__ in (
+        "LlamaForCausalLM",
+        "Qwen2ForCausalLM",
+        "Qwen3ForCausalLM",
+    ):
         layers = model.model.layers
     elif model.__class__.__name__ == "InternVL3":
         layers = model.language_model.model.layers
@@ -55,7 +60,7 @@ def get_blocks(model):
 
 
 def move_embed(model, device):
-    if isinstance(model, (LlamaForCausalLM, Qwen2ForCausalLM)):
+    if isinstance(model, (LlamaForCausalLM, Qwen2ForCausalLM, Qwen3ForCausalLM)):
         model.model.embed_tokens = model.model.embed_tokens.to(device)
         model.model.rotary_emb = model.model.rotary_emb.to(device)
     elif model.__class__.__name__ == "InternVL3":
@@ -103,7 +108,9 @@ def run_awq(
     model,
     enc,
     w_bit,
-    q_config,
+    a_bit,
+    w_q_config,
+    a_q_config,
     n_samples=512,
     seqlen=512,
     auto_scale=True,
@@ -146,6 +153,8 @@ def run_awq(
 
     # patch layer 0 to catch input and kwargs
     layers[0] = Catcher(layers[0])
+    if model.__class__.__name__ == "Qwen3ForCausalLM":
+        layers[0].attention_type = layers[0].module.attention_type
     try:
         if model.__class__.__name__ == "LlavaLlamaModel":
             model.llm(samples.to(next(model.parameters()).device))
@@ -178,9 +187,7 @@ def run_awq(
 
         # firstly, get input features of all linear layers
         def cache_input_hook(m, x, y, name, feat_dict):
-            x = x[0]
-            x = x.detach().cpu()
-            feat_dict[name].append(x)
+            feat_dict[name].append(x[0].detach())
 
         input_feat = defaultdict(list)
         handles = []
@@ -192,7 +199,9 @@ def run_awq(
             )
         inps = inps.to(next(layer.parameters()).device)  # in case multi-gpu
         # get output as next layer's input
-        inps = layer(inps, **layer_kwargs)[0]
+        inps = layer(inps, **layer_kwargs)
+        if isinstance(inps, tuple):
+            inps = inps[0]
         for h in handles:
             h.remove()
         # now solve for scaling and clipping
@@ -208,7 +217,9 @@ def run_awq(
                 layer,
                 layer_kwargs,
                 w_bit=w_bit,
-                q_config=q_config,
+                a_bit=a_bit,
+                w_q_config=w_q_config,
+                a_q_config=a_q_config,
                 input_feat=input_feat,
             )
             # apply_scale(layer, scales_list, input_feat_dict=input_feat)
@@ -228,7 +239,9 @@ def run_awq(
             clip_list = auto_clip_block(
                 layer,
                 w_bit=w_bit,
-                q_config=q_config,
+                a_bit=a_bit,
+                w_q_config=w_q_config,
+                a_q_config=a_q_config,
                 input_feat=input_feat,
             )
             apply_clip(layer, clip_list)
