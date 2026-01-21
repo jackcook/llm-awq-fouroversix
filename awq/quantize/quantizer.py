@@ -6,7 +6,6 @@ from .qmodule import ScaledActivation
 from ..utils.module import set_op_by_name
 
 from fouroversix import AdaptiveBlockScalingRule, quantize_to_fp4
-from fouroversix.quantize.reference import dequantize_from_fp4
 from transformers.models.bloom.modeling_bloom import BloomBlock
 
 EMBEDDING_KEYWORDS = ["embed"]
@@ -68,8 +67,7 @@ def pseudo_quantize_tensor(
     assert not inplace
     assert w.dim() == 2
 
-    out_e2m1, out_e4m3, out_normconst = quantize_to_fp4(w, scale_rule=scale_rule)
-    return dequantize_from_fp4(out_e2m1, out_e4m3, out_normconst)
+    return quantize_to_fp4(w, scale_rule=scale_rule).dequantize()
 
     org_w_shape = w.shape
     if q_group_size > 0:
