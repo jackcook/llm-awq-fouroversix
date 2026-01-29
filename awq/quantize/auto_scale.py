@@ -85,7 +85,7 @@ def scale_gelu_fc(gelu, fc, scales):
 
 
 @torch.no_grad()
-def auto_scale_block(module, module_kwargs, w_bit, a_bit, w_q_config, a_q_config, input_feat):
+def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat):
     from .quantizer import pseudo_quantize_tensor
 
     # firstly, get the weight quantize function
@@ -95,7 +95,7 @@ def auto_scale_block(module, module_kwargs, w_bit, a_bit, w_q_config, a_q_config
             return pseudo_quantize_tensor(
                 p,
                 n_bit=w_bit,
-                **w_q_config,
+                **q_config,
             ).detach()
 
     else:
@@ -111,12 +111,18 @@ def auto_scale_block(module, module_kwargs, w_bit, a_bit, w_q_config, a_q_config
         # w: co, ci
         # x: n, ci
         x = x.to(next(block.parameters()).device)
-        for i in range(x.shape[0]):
-            x[i] = pseudo_quantize_tensor(x[i], n_bit=a_bit, **a_q_config)
         with torch.no_grad():
+            for _, layer in block.named_modules():
+                if layer.__class__.__name__ == "FP4LinearForAWQ":
+                    layer.high_precision = True
+
             org_out = block(x, **kwargs)
             if isinstance(org_out, tuple):
                 org_out = org_out[0]
+
+            for _, layer in block.named_modules():
+                if layer.__class__.__name__ == "FP4LinearForAWQ":
+                    layer.high_precision = False
 
         x_max = get_act_scale(x)
 

@@ -3,7 +3,7 @@
 
 from typing import Optional, Union
 from torch.nn import Parameter
-import awq_inference_engine
+# import awq_inference_engine
 import torch
 import gc
 from awq.utils.module import set_op_by_name

@@ -28,11 +28,7 @@ def get_named_linears(module):
 
 
 def get_blocks(model):
-    if model.__class__.__name__ in (
-        "LlamaForCausalLM",
-        "Qwen2ForCausalLM",
-        "Qwen3ForCausalLM",
-    ):
+    if model.__class__.__name__ in ("LlamaForCausalLM", "Qwen2ForCausalLM", "Qwen3ForCausalLM"):
         layers = model.model.layers
     elif model.__class__.__name__ == "InternVL3":
         layers = model.language_model.model.layers
@@ -108,9 +104,7 @@ def run_awq(
     model,
     enc,
     w_bit,
-    a_bit,
-    w_q_config,
-    a_q_config,
+    q_config,
     n_samples=512,
     seqlen=512,
     auto_scale=True,
@@ -187,7 +181,9 @@ def run_awq(
 
         # firstly, get input features of all linear layers
         def cache_input_hook(m, x, y, name, feat_dict):
-            feat_dict[name].append(x[0].detach())
+            x = x[0]
+            x = x.detach().cpu()
+            feat_dict[name].append(x)
 
         input_feat = defaultdict(list)
         handles = []
@@ -217,9 +213,7 @@ def run_awq(
                 layer,
                 layer_kwargs,
                 w_bit=w_bit,
-                a_bit=a_bit,
-                w_q_config=w_q_config,
-                a_q_config=a_q_config,
+                q_config=q_config,
                 input_feat=input_feat,
             )
             # apply_scale(layer, scales_list, input_feat_dict=input_feat)
@@ -239,9 +233,7 @@ def run_awq(
             clip_list = auto_clip_block(
                 layer,
                 w_bit=w_bit,
-                a_bit=a_bit,
-                w_q_config=w_q_config,
-                a_q_config=a_q_config,
+                q_config=q_config,
                 input_feat=input_feat,
             )
             apply_clip(layer, clip_list)
