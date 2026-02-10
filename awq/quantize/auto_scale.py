@@ -113,7 +113,8 @@ def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat):
         x = x.to(next(block.parameters()).device)
         with torch.no_grad():
             for _, layer in block.named_modules():
-                if layer.__class__.__name__ == "FP4LinearForAWQ":
+                if layer.__class__.__name__ == "FourOverSixLinearForAWQ":
+                    assert hasattr(layer, "high_precision")
                     layer.high_precision = True
 
             org_out = block(x, **kwargs)
@@ -121,7 +122,7 @@ def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat):
                 org_out = org_out[0]
 
             for _, layer in block.named_modules():
-                if layer.__class__.__name__ == "FP4LinearForAWQ":
+                if layer.__class__.__name__ == "FourOverSixLinearForAWQ":
                     layer.high_precision = False
 
         x_max = get_act_scale(x)
@@ -463,7 +464,9 @@ def apply_scale(module, scales_list, input_feat_dict=None):
         if isinstance(prev_op, nn.Linear):
             assert len(layers) == 1
             scale_fc_fc(prev_op, layers[0], scales)
-        elif isinstance(prev_op, (nn.LayerNorm, LlamaRMSNorm, Qwen2RMSNorm, Qwen3RMSNorm)):
+        elif isinstance(
+            prev_op, (nn.LayerNorm, LlamaRMSNorm, Qwen2RMSNorm, Qwen3RMSNorm)
+        ):
             scale_ln_fcs(prev_op, layers, scales)
         elif isinstance(prev_op, (nn.GELU, BloomGelu, GELUActivation, nn.SiLU)):
             new_module = ScaledActivation(prev_op, scales)
