@@ -112,10 +112,14 @@ def auto_scale_block(module, module_kwargs, w_bit, q_config, input_feat):
         # x: n, ci
         x = x.to(next(block.parameters()).device)
         with torch.no_grad():
+            found_four_over_six_linear = False
+
             for _, layer in block.named_modules():
                 if layer.__class__.__name__ == "FourOverSixLinearForAWQ":
-                    assert hasattr(layer, "high_precision")
                     layer.high_precision = True
+                    found_four_over_six_linear = True
+
+            assert found_four_over_six_linear
 
             org_out = block(x, **kwargs)
             if isinstance(org_out, tuple):
